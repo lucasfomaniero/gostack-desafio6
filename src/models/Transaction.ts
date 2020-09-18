@@ -17,7 +17,7 @@ class Transaction {
   @Column()
   type: 'income' | 'outcome';
 
-  @Column()
+  @Column('decimal', { scale: 2 })
   value: number;
 
   @Column()
