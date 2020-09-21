@@ -1,7 +1,8 @@
-import { getRepository, Repository } from 'typeorm';
+import { getRepository, getCustomRepository } from 'typeorm';
 import AppError from '../errors/AppError';
 import Category from '../models/Category';
 import Transaction from '../models/Transaction';
+import TransactionsRepository from '../repositories/TransactionsRepository';
 
 interface Request {
   title: string;
@@ -11,13 +12,10 @@ interface Request {
 }
 
 class CreateTransactionService {
-  private transactionRepository: Repository<Transaction>;
-
-  private categoryRepository: Repository<Category>;
+  private transactionsRepository: TransactionsRepository;
 
   constructor() {
-    this.transactionRepository = getRepository(Transaction);
-    this.categoryRepository = getRepository(Category);
+    this.transactionsRepository = getCustomRepository(TransactionsRepository);
   }
 
   public async execute({
@@ -26,53 +24,48 @@ class CreateTransactionService {
     type,
     category,
   }: Request): Promise<Transaction> {
-    const transactionRepository = getRepository(Transaction);
-    let foundCategory;
-    let newCategory;
-    // Check if category already exists:
-    if (this.categoryExists(category)) {
-      // If already exists, gets it from the database.
-      foundCategory = await this.categoryRepository.findOne({
-        where: { title: category },
-      });
-    } else {
-      // If is a new one, create in database.
-      newCategory = await this.createNewCategory(category);
-    }
+    const foundCategory = await this.getCategory(category);
+    const isValid = await this.isValidTransaction(value, type);
 
-    // Create a new transaction with the retrieved category
-    const transaction = await transactionRepository.save({
-      category_id: foundCategory?.id ? foundCategory.id : newCategory?.id,
-      title,
-      type,
-      value,
-    });
-
-    if (!transaction) {
-      // Throws an Error if was not possible to create the transaction. eg: Database error.
+    if (!isValid) {
       throw new AppError(
-        'Error: it was not possible to create the transaction. Try again later.',
+        'Could not create the transaction. The value is greater than total balance.',
+        400,
       );
     }
 
+    const transaction = this.transactionsRepository.create({
+      title,
+      value,
+      type,
+      category: foundCategory,
+    });
+
+    await this.transactionsRepository.save(transaction);
     return transaction;
   }
 
-  private async categoryExists(category: string): Promise<boolean> {
-    const foundCategory = await this.categoryRepository.findOne({
+  private async isValidTransaction(
+    value: number,
+    type: 'income' | 'outcome',
+  ): Promise<boolean> {
+    const { total } = await this.transactionsRepository.getBalance();
+    let isValid = true;
+    // Check if is outcome type and value is greater than total balance
+    if (type === 'outcome' && value > total) isValid = false;
+    return isValid;
+  }
+
+  private async getCategory(category: string): Promise<Category> {
+    const categoryRepository = getRepository(Category);
+    let foundCategory = await categoryRepository.findOne({
       where: { title: category },
     });
 
-    if (foundCategory) {
-      return true;
+    if (!foundCategory) {
+      foundCategory = await categoryRepository.save({ title: category });
     }
-    return false;
-  }
-
-  private async createNewCategory(title: string): Promise<Category> {
-    const newCategory = await this.categoryRepository.save({ title });
-
-    return newCategory;
+    return foundCategory;
   }
 }
 
